@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deadlock Detector</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+    <button id="themeToggle" class="theme-toggle">
+        <i class="fas fa-moon"></i>
+    </button>
+
+    <div class="info-panel">
+        <h3>Deadlock Information</h3>
+        <p>Processes: <span id="processCount">0</span></p>
+        <p>Dependencies: <span id="dependencyCount">0</span></p>
+        <p>Status: <span id="deadlockStatus">No deadlock</span></p>
+        <p>Total Resources: <span id="totalResources">0</span></p>
+        <p>Allocated Resources: <span id="allocatedResources">0</span></p>
+        <p>Available Resources: <span id="availableResources">0</span></p>
+    </div>
+
+    <h1>Deadlock Detection and Prevention</h1>
+    <div class="controls">
+        <div class="control-group">
+            <label for="numProcesses">Number of Processes:</label>
+            <input type="number" id="numProcesses" min="1" value="3">
+            <button onclick="initializeProcesses()">Initialize</button>
+        </div>
+        <div class="control-group">
+            <label for="totalSystemResources">Total System Resources:</label>
+            <input type="number" id="totalSystemResources" min="1" value="10">
+            <button onclick="updateSystemResources()">Update Resources</button>
+        </div>
+    </div>
+
+    <div id="dependencyContainer"></div>
+
+    <div class="action-buttons">
+        <button onclick="detectDeadlock()">Detect Deadlock</button>
+        <button onclick="resolveDeadlock()">Resolve Deadlock</button>
+        <button onclick="preventDeadlock()">Prevent Deadlock</button>
+        <button onclick="analyzeSystem()">Analyze System</button>
+    </div>
+
+    <div id="analysisResults" class="analysis-panel"></div>
+
+    <svg id="graph" width="800" height="400">
+        <defs>
+            <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#808080"/>
+            </marker>
+        </defs>
+    </svg>
+
+    <div id="deadlockInfo"></div>
+
+    <script>
+        // Theme Toggle Functionality
+        const themeToggle = document.getElementById('themeToggle');
+        const html = document.documentElement;
+        
+        // Check for saved theme preference
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme) {
+            html.setAttribute('data-theme', savedTheme);
+            updateThemeIcon(savedTheme);
+        }
+        
+        themeToggle.addEventListener('click', () => {
+            const currentTheme = html.getAttribute('data-theme');
+            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+            html.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateThemeIcon(newTheme);
+        });
+        
+        function updateThemeIcon(theme) {
+            const icon = themeToggle.querySelector('i');
+            icon.className = theme === 'light' ? 'fas fa-sun' : 'fas fa-moon';
+        }
+
+        let processes = [];
+        let dependencies = [];
+        let processElements = {};
+        let curveOffset = 30;
+        let deadlockPaths = [];
+        let totalSystemResources = 10;
+        let resourceAllocation = [];
+        let resourceRequest = [];
+
+        function initializeProcesses() {
+            processes = [];
+            dependencies = [];
+            deadlockPaths = [];
+            resourceAllocation = [];
+            resourceRequest = [];
+            
+            const num = document.getElementById("numProcesses").value;
+            const graph = document.getElementById("graph");
+            graph.innerHTML = `<defs>
+                <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#808080"/>
+                </marker>
+            </defs>`;
+            
+            for (let i = 0; i < num; i++) {
+                const resources = Math.floor(Math.random() * 3) + 1;
+                processes.push({ 
+                    id: i, 
+                    priority: Math.floor(Math.random() * 10),
+                    resources: resources,
+                    allocated: 0,
+                    maxNeeded: resources + Math.floor(Math.random() * 2)
+                });
+                resourceAllocation[i] = 0;
+                resourceRequest[i] = processes[i].maxNeeded;
+            }
+            updateInfoPanel();
+            drawProcesses();
+        }
+
+        function updateSystemResources() {
+            totalSystemResources = parseInt(document.getElementById("totalSystemResources").value);
+            updateInfoPanel();
+        }
+
+        function updateInfoPanel() {
+            document.getElementById("processCount").textContent = processes.length;
+            document.getElementById("dependencyCount").textContent = dependencies.length;
+            document.getElementById("totalResources").textContent = totalSystemResources;
+            
+            const allocated = resourceAllocation.reduce((a, b) => a + b, 0);
+            document.getElementById("allocatedResources").textContent = allocated;
+            document.getElementById("availableResources").textContent = totalSystemResources - allocated;
+        }
+
+        function drawProcesses() {
+            const graph = document.getElementById("graph");
+            processElements = {};
+            
+            processes.forEach((p, index) => {
+                let x = 100 + index * 150;
+                let y = 200;
+                
+                let circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+                circle.setAttribute("cx", x);
+                circle.setAttribute("cy", y);
+                circle.setAttribute("r", 30);
+                circle.setAttribute("fill", "lightblue");
+                circle.setAttribute("stroke", "black");
+                circle.setAttribute("data-id", p.id);
+                
+                let text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                text.setAttribute("x", x);
+                text.setAttribute("y", y + 5);
+                text.setAttribute("text-anchor", "middle");
+                text.textContent = `P${p.id}`;
+                
+                let resourceText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                resourceText.setAttribute("x", x);
+                resourceText.setAttribute("y", y + 25);
+                resourceText.setAttribute("text-anchor", "middle");
+                resourceText.setAttribute("font-size", "10");
+                resourceText.textContent = `A:${p.allocated}/M:${p.maxNeeded}`;
+                
+                processElements[p.id] = { circle, x, y };
+                graph.appendChild(circle);
+                graph.appendChild(text);
+                graph.appendChild(resourceText);
+            });
+            createDependencySelection();
+        }
+
+        function createDependencySelection() {
+            const container = document.getElementById("dependencyContainer");
+            container.innerHTML = "";
+            
+            let fromSelect = document.createElement("select");
+            fromSelect.id = "fromProcess";
+            processes.forEach(p => {
+                let option = document.createElement("option");
+                option.value = p.id;
+                option.textContent = `P${p.id} (R:${p.resources})`;
+                fromSelect.appendChild(option);
+            });
+            
+            let toSelect = document.createElement("select");
+            toSelect.id = "toProcess";
+            processes.forEach(p => {
+                let option = document.createElement("option");
+                option.value = p.id;
+                option.textContent = `P${p.id} (R:${p.resources})`;
+                toSelect.appendChild(option);
+            });
+            
+            let button = document.createElement("button");
+            button.textContent = "Add Dependency";
+            button.onclick = () => addDependency();
+            
+            container.appendChild(fromSelect);
+            container.appendChild(toSelect);
+            container.appendChild(button);
+        }
+
+        function addDependency() {
+            let from = parseInt(document.getElementById("fromProcess").value);
+            let to = parseInt(document.getElementById("toProcess").value);
+            
+            if (from !== to) {
+                dependencies.push([from, to]);
+                updateInfoPanel();
+                drawDependencies();
+            }
+        }
+
+        function drawDependencies() {
+            const graph = document.getElementById("graph");
+            graph.innerHTML = `<defs>
+                <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#808080"/>
+                </marker>
+            </defs>`;
+            drawProcesses();
+
+            dependencies.forEach(([from, to], index) => {
+                let fromX = processElements[from].x;
+                let fromY = processElements[from].y;
+                let toX = processElements[to].x;
+                let toY = processElements[to].y;
+
+                let curveY = fromY;
+                let curveX = (fromX + toX) / 2;
+                
+                if (index % 3 === 1) curveY -= curveOffset;
+                else if (index % 3 === 2) curveY += curveOffset;
+
+                let path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                path.setAttribute("d", `M ${fromX} ${fromY} Q ${curveX} ${curveY}, ${toX} ${toY}`);
+                path.setAttribute("class", "dependency");
+                path.setAttribute("stroke", "black");
+                path.setAttribute("fill", "transparent");
+                path.setAttribute("marker-end", "url(#arrowhead)");
+
+                graph.appendChild(path);
+            });
+        }
+
+        function detectDeadlock() {
+            let graph = Array(processes.length).fill(0).map(() => Array(processes.length).fill(0));
+            dependencies.forEach(([from, to]) => graph[from][to] = 1);
+            
+            function dfs(node, visited, stack, path) {
+                visited[node] = 1;
+                stack[node] = 1;
+                path.push(node);
+                
+                for (let i = 0; i < processes.length; i++) {
+                    if (graph[node][i]) {
+                        if (!visited[i] && dfs(i, visited, stack, path)) return true;
+                        else if (stack[i]) {
+                            deadlockPaths.push([...path, i]);
+                            return true;
+                        }
+                    }
+                }
+                stack[node] = 0;
+                path.pop();
+                return false;
+            }
+            
+            let visited = Array(processes.length).fill(0);
+            let stack = Array(processes.length).fill(0);
+            deadlockPaths = [];
+            
+            for (let i = 0; i < processes.length; i++) {
+                if (!visited[i] && dfs(i, visited, stack, [])) {
+                    document.getElementById("deadlockStatus").textContent = "Deadlock detected!";
+                    visualizeDeadlock();
+                    analyzeDeadlock();
+                    updateDeadlockInfo();
+                    return;
+                }
+            }
+            document.getElementById("deadlockStatus").textContent = "No deadlock";
+            updateDeadlockInfo();
+        }
+
+        function visualizeDeadlock() {
+            // Reset all circles to normal state
+            Object.values(processElements).forEach(el => {
+                el.circle.setAttribute("class", "");
+            });
+
+            // Highlight deadlock paths
+            deadlockPaths.forEach(path => {
+                path.forEach(node => {
+                    processElements[node].circle.setAttribute("class", "deadlock-circle");
+                });
+
+                // Highlight dependencies in the deadlock cycle
+                for (let i = 0; i < path.length - 1; i++) {
+                    const from = path[i];
+                    const to = path[i + 1];
+                    const pathElements = document.querySelectorAll(".dependency");
+                    pathElements.forEach(path => {
+                        const fromX = processElements[from].x;
+                        const fromY = processElements[from].y;
+                        const toX = processElements[to].x;
+                        const toY = processElements[to].y;
+                        
+                        if (path.getAttribute("d").includes(`M ${fromX} ${fromY}`) && 
+                            path.getAttribute("d").includes(`${toX} ${toY}`)) {
+                            path.setAttribute("class", "dependency deadlock-path");
+                        }
+                    });
+                }
+            });
+        }
+
+        function analyzeDeadlock() {
+            const analysisPanel = document.getElementById("analysisResults");
+            analysisPanel.innerHTML = "<h3>Deadlock Analysis</h3>";
+            
+            // Graph Analysis
+            let graph = Array(processes.length).fill(0).map(() => Array(processes.length).fill(0));
+            dependencies.forEach(([from, to]) => graph[from][to] = 1);
+            
+            // Find all cycles in the graph
+            let allCycles = findAllCycles(graph);
+            
+            // Create analysis visualization
+            const analysisGraph = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            analysisGraph.setAttribute("width", "600");
+            analysisGraph.setAttribute("height", "300");
+            analysisGraph.setAttribute("class", "analysis-graph");
+            
+            // Add marker definition
+            const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+            const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+            marker.setAttribute("id", "analysis-arrowhead");
+            marker.setAttribute("markerWidth", "10");
+            marker.setAttribute("markerHeight", "7");
+            marker.setAttribute("refX", "10");
+            marker.setAttribute("refY", "3.5");
+            marker.setAttribute("orient", "auto");
+            const polygon = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+            polygon.setAttribute("points", "0 0, 10 3.5, 0 7");
+            polygon.setAttribute("fill", "red");
+            marker.appendChild(polygon);
+            defs.appendChild(marker);
+            analysisGraph.appendChild(defs);
+            
+            // Calculate positions for nodes
+            const nodePositions = {};
+            const radius = 20;
+            const centerX = 300;
+            const centerY = 150;
+            const angleStep = (2 * Math.PI) / processes.length;
+            
+            processes.forEach((p, index) => {
+                const angle = index * angleStep;
+                const x = centerX + Math.cos(angle) * 100;
+                const y = centerY + Math.sin(angle) * 100;
+                nodePositions[p.id] = { x, y };
+                
+                // Draw node
+                const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+                circle.setAttribute("cx", x);
+                circle.setAttribute("cy", y);
+                circle.setAttribute("r", radius);
+                circle.setAttribute("fill", "lightblue");
+                circle.setAttribute("stroke", "black");
+                analysisGraph.appendChild(circle);
+                
+                // Add process label
+                const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                text.setAttribute("x", x);
+                text.setAttribute("y", y + 5);
+                text.setAttribute("text-anchor", "middle");
+                text.textContent = `P${p.id}`;
+                analysisGraph.appendChild(text);
+            });
+            
+            // Draw dependencies
+            dependencies.forEach(([from, to]) => {
+                const fromPos = nodePositions[from];
+                const toPos = nodePositions[to];
+                
+                const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                const midX = (fromPos.x + toPos.x) / 2;
+                const midY = (fromPos.y + toPos.y) / 2;
+                const controlX = midX + (toPos.y - fromPos.y) / 3;
+                const controlY = midY - (toPos.x - fromPos.x) / 3;
+                
+                path.setAttribute("d", `M ${fromPos.x} ${fromPos.y} Q ${controlX} ${controlY}, ${toPos.x} ${toPos.y}`);
+                path.setAttribute("class", "analysis-dependency");
+                path.setAttribute("stroke", "black");
+                path.setAttribute("fill", "transparent");
+                path.setAttribute("marker-end", "url(#analysis-arrowhead)");
+                analysisGraph.appendChild(path);
+            });
+            
+            // Highlight cycles
+            allCycles.forEach((cycle, index) => {
+                const hue = (index * 137.5) % 360; // Golden angle for color distribution
+                cycle.forEach((node, i) => {
+                    const nextNode = cycle[(i + 1) % cycle.length];
+                    const fromPos = nodePositions[node];
+                    const toPos = nodePositions[nextNode];
+                    
+                    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                    const midX = (fromPos.x + toPos.x) / 2;
+                    const midY = (fromPos.y + toPos.y) / 2;
+                    const controlX = midX + (toPos.y - fromPos.y) / 3;
+                    const controlY = midY - (toPos.x - fromPos.x) / 3;
+                    
+                    path.setAttribute("d", `M ${fromPos.x} ${fromPos.y} Q ${controlX} ${controlY}, ${toPos.x} ${toPos.y}`);
+                    path.setAttribute("class", "cycle-path");
+                    path.setAttribute("stroke", `hsl(${hue}, 100%, 50%)`);
+                    path.setAttribute("stroke-width", "3");
+                    path.setAttribute("fill", "transparent");
+                    path.setAttribute("marker-end", "url(#analysis-arrowhead)");
+                    analysisGraph.appendChild(path);
+                });
+            });
+            
+            analysisPanel.innerHTML += `
+                <div class="graph-analysis">
+                    <h4>Graph Structure Analysis</h4>
+                    <div class="graph-visualization">
+                        ${analysisGraph.outerHTML}
+                    </div>
+                    <p>Total Nodes (Processes): ${processes.length}</p>
+                    <p>Total Edges (Dependencies): ${dependencies.length}</p>
+                    <p>Graph Density: ${(dependencies.length / (processes.length * (processes.length - 1))).toFixed(2)}</p>
+                </div>
+            `;
+            
+            // Display all cycles found
+            if (allCycles.length > 0) {
+                analysisPanel.innerHTML += `
+                    <div class="cycle-analysis">
+                        <h4>Cycle Analysis</h4>
+                        <p>Total Cycles Found: ${allCycles.length}</p>
+                    </div>
+                `;
+                
+                allCycles.forEach((cycle, index) => {
+                    const cycleProcesses = cycle.map(p => `P${p}`).join(" -> ");
+                    analysisPanel.innerHTML += `
+                        <div class="cycle-details">
+                            <h5>Cycle ${index + 1}</h5>
+                            <p>Processes: ${cycleProcesses}</p>
+                            <p>Cycle Length: ${cycle.length}</p>
+                            <div class="resource-analysis">
+                                <p>Resource Analysis:</p>
+                                <ul>
+                                    <li>Total Resources Needed: ${calculateCycleResources(cycle)}</li>
+                                    <li>Resources Allocated: ${calculateAllocatedResources(cycle)}</li>
+                                    <li>Additional Resources Needed: ${calculateAdditionalResources(cycle)}</li>
+                                </ul>
+                            </div>
+                        </div>
+                    `;
+                });
+            } else {
+                analysisPanel.innerHTML += "<p>No cycles found in the graph.</p>";
+            }
+            
+            // Analyze graph connectivity
+            const stronglyConnectedComponents = findStronglyConnectedComponents(graph);
+            analysisPanel.innerHTML += `
+                <div class="connectivity-analysis">
+                    <h4>Graph Connectivity</h4>
+                    <p>Strongly Connected Components: ${stronglyConnectedComponents.length}</p>
+                    <div class="scc-details">
+                        ${stronglyConnectedComponents.map((scc, index) => `
+                            <div class="scc">
+                                <h5>Component ${index + 1}</h5>
+                                <p>Processes: ${scc.map(p => `P${p}`).join(", ")}</p>
+                                <p>Size: ${scc.length}</p>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        function findAllCycles(graph) {
+            let cycles = [];
+            let visited = Array(graph.length).fill(false);
+            let path = [];
+            
+            function dfs(node, start) {
+                visited[node] = true;
+                path.push(node);
+                
+                for (let i = 0; i < graph.length; i++) {
+                    if (graph[node][i]) {
+                        if (i === start && path.length > 2) {
+                            cycles.push([...path]);
+                        } else if (!visited[i]) {
+                            dfs(i, start);
+                        }
+                    }
+                }
+                
+                path.pop();
+                visited[node] = false;
+            }
+            
+            for (let i = 0; i < graph.length; i++) {
+                dfs(i, i);
+            }
+            
+            return cycles;
+        }
+
+        function findStronglyConnectedComponents(graph) {
+            let visited = Array(graph.length).fill(false);
+            let order = [];
+            let components = [];
+            
+            // First DFS to get the order
+            function dfs1(node) {
+                visited[node] = true;
+                for (let i = 0; i < graph.length; i++) {
+                    if (graph[node][i] && !visited[i]) {
+                        dfs1(i);
+                    }
+                }
+                order.push(node);
+            }
+            
+            for (let i = 0; i < graph.length; i++) {
+                if (!visited[i]) {
+                    dfs1(i);
+                }
+            }
+            
+            // Transpose the graph
+            let transposed = Array(graph.length).fill(0).map(() => Array(graph.length).fill(0));
+            for (let i = 0; i < graph.length; i++) {
+                for (let j = 0; j < graph.length; j++) {
+                    transposed[j][i] = graph[i][j];
+                }
+            }
+            
+            // Second DFS on transposed graph
+            visited = Array(graph.length).fill(false);
+            order.reverse();
+            
+            function dfs2(node, component) {
+                visited[node] = true;
+                component.push(node);
+                for (let i = 0; i < transposed.length; i++) {
+                    if (transposed[node][i] && !visited[i]) {
+                        dfs2(i, component);
+                    }
+                }
+            }
+            
+            for (let node of order) {
+                if (!visited[node]) {
+                    let component = [];
+                    dfs2(node, component);
+                    components.push(component);
+                }
+            }
+            
+            return components;
+        }
+
+        function calculateCycleResources(cycle) {
+            return cycle.reduce((total, p) => total + processes[p].maxNeeded, 0);
+        }
+
+        function calculateAllocatedResources(cycle) {
+            return cycle.reduce((total, p) => total + processes[p].allocated, 0);
+        }
+
+        function calculateAdditionalResources(cycle) {
+            return cycle.reduce((total, p) => total + (processes[p].maxNeeded - processes[p].allocated), 0);
+        }
+
+        function analyzeSystem() {
+            const analysisPanel = document.getElementById("analysisResults");
+            analysisPanel.innerHTML = "<h3>System Analysis</h3>";
+            
+            // Resource Analysis
+            const allocated = resourceAllocation.reduce((a, b) => a + b, 0);
+            const available = totalSystemResources - allocated;
+            
+            analysisPanel.innerHTML += `
+                <p>Resource Analysis:</p>
+                <ul>
+                    <li>Total System Resources: ${totalSystemResources}</li>
+                    <li>Allocated Resources: ${allocated}</li>
+                    <li>Available Resources: ${available}</li>
+                    <li>Resource Utilization: ${((allocated/totalSystemResources)*100).toFixed(2)}%</li>
+                </ul>
+            `;
+            
+            // Process Analysis
+            analysisPanel.innerHTML += "<p>Process Analysis:</p><ul>";
+            processes.forEach(p => {
+                analysisPanel.innerHTML += `
+                    <li>Process P${p.id}:
+                        <ul>
+                            <li>Priority: ${p.priority}</li>
+                            <li>Allocated: ${p.allocated}</li>
+                            <li>Maximum Needed: ${p.maxNeeded}</li>
+                            <li>Additional Needed: ${p.maxNeeded - p.allocated}</li>
+                        </ul>
+                    </li>
+                `;
+            });
+            analysisPanel.innerHTML += "</ul>";
+            
+            // Safety Analysis
+            const isSafe = checkSafety();
+            analysisPanel.innerHTML += `
+                <p>Safety Analysis:</p>
+                <p>System is ${isSafe ? "in a safe state" : "in an unsafe state"}</p>
+            `;
+        }
+
+        function checkSafety() {
+            let work = totalSystemResources - resourceAllocation.reduce((a, b) => a + b, 0);
+            let finish = Array(processes.length).fill(false);
+            let safeSequence = [];
+            
+            while (true) {
+                let found = false;
+                for (let i = 0; i < processes.length; i++) {
+                    if (!finish[i] && (processes[i].maxNeeded - processes[i].allocated) <= work) {
+                        work += processes[i].allocated;
+                        finish[i] = true;
+                        safeSequence.push(i);
+                        found = true;
+                    }
+                }
+                if (!found) break;
+            }
+            
+            return finish.every(f => f);
+        }
+
+        function preventDeadlock() {
+            const analysisPanel = document.getElementById("analysisResults");
+            analysisPanel.innerHTML = "<h3>Deadlock Prevention Analysis</h3>";
+            
+            // Check if system is in safe state
+            if (checkSafety()) {
+                analysisPanel.innerHTML += "<p>System is in a safe state. No prevention needed.</p>";
+                return;
+            }
+            
+            // Analyze potential prevention strategies
+            analysisPanel.innerHTML += "<p>Prevention Strategies:</p><ul>";
+            
+            // 1. Resource Preemption
+            let preemptionCandidates = [];
+            processes.forEach(p => {
+                if (p.allocated > 0) {
+                    preemptionCandidates.push({
+                        process: p.id,
+                        resources: p.allocated,
+                        priority: p.priority
+                    });
+                }
+            });
+            
+            if (preemptionCandidates.length > 0) {
+                preemptionCandidates.sort((a, b) => a.priority - b.priority);
+                analysisPanel.innerHTML += `
+                    <li>Resource Preemption:
+                        <ul>
+                            <li>Suggested Process: P${preemptionCandidates[0].process}</li>
+                            <li>Resources to Preempt: ${preemptionCandidates[0].resources}</li>
+                            <li>Priority: ${preemptionCandidates[0].priority}</li>
+                        </ul>
+                    </li>
+                `;
+            }
+            
+            // 2. Process Termination
+            let terminationCandidates = deadlockPaths[0]?.map(p => ({
+                process: p,
+                priority: processes[p].priority,
+                resources: processes[p].allocated
+            })).sort((a, b) => a.priority - b.priority);
+            
+            if (terminationCandidates?.length > 0) {
+                analysisPanel.innerHTML += `
+                    <li>Process Termination:
+                        <ul>
+                            <li>Suggested Process: P${terminationCandidates[0].process}</li>
+                            <li>Resources to Release: ${terminationCandidates[0].resources}</li>
+                            <li>Priority: ${terminationCandidates[0].priority}</li>
+                        </ul>
+                    </li>
+                `;
+            }
+            
+            // 3. Resource Allocation Adjustment
+            let allocationAdjustments = [];
+            processes.forEach(p => {
+                if (p.maxNeeded > p.allocated) {
+                    allocationAdjustments.push({
+                        process: p.id,
+                        current: p.allocated,
+                        max: p.maxNeeded,
+                        difference: p.maxNeeded - p.allocated
+                    });
+                }
+            });
+            
+            if (allocationAdjustments.length > 0) {
+                analysisPanel.innerHTML += `
+                    <li>Resource Allocation Adjustment:
+                        <ul>
+                            ${allocationAdjustments.map(a => `
+                                <li>Process P${a.process}:
+                                    <ul>
+                                        <li>Current: ${a.current}</li>
+                                        <li>Maximum: ${a.max}</li>
+                                        <li>Additional Needed: ${a.difference}</li>
+                                    </ul>
+                                </li>
+                            `).join('')}
+                        </ul>
+                    </li>
+                `;
+            }
+            
+            analysisPanel.innerHTML += "</ul>";
+        }
+
+        function updateDeadlockInfo() {
+            const deadlockInfo = document.getElementById("deadlockInfo");
+            const deadlockPaths = findDeadlockCycles();
+            
+            if (deadlockPaths.length > 0) {
+                deadlockInfo.innerHTML = `
+                    <h3>Deadlock Detected!</h3>
+                    <p>Number of Deadlock Cycles: ${deadlockPaths.length}</p>
+                    <div class="deadlock-progress">
+                        <h4>Resolution Progress</h4>
+                        <div class="pie-chart-container">
+                            <svg class="pie-chart" width="200" height="200">
+                                <circle class="pie-background" cx="100" cy="100" r="80" fill="#e0f7fa" />
+                                <path class="pie-progress" d="" fill="#ff4b4b" />
+                                <text class="pie-text" x="100" y="100" text-anchor="middle" dominant-baseline="middle">0%</text>
+                            </svg>
+                        </div>
+                        <p class="progress-text">Resolved: 0/${deadlockPaths.length} cycles</p>
+                    </div>
+                `;
+                
+                // Update pie chart
+                updatePieChart(0, deadlockPaths.length);
+            } else {
+                deadlockInfo.innerHTML = "<p>No deadlock detected.</p>";
+            }
+        }
+
+        function updatePieChart(resolved, total) {
+            const pieChart = document.querySelector('.pie-chart');
+            const progressPath = pieChart.querySelector('.pie-progress');
+            const progressText = pieChart.querySelector('.pie-text');
+            const progressTextElement = document.querySelector('.progress-text');
+            
+            const percentage = (resolved / total) * 100;
+            const angle = (percentage / 100) * 360;
+            
+            // Calculate the path for the pie chart
+            const radius = 80;
+            const centerX = 100;
+            const centerY = 100;
+            
+            if (percentage === 0) {
+                progressPath.setAttribute('d', '');
+            } else if (percentage === 100) {
+                progressPath.setAttribute('d', `M ${centerX} ${centerY} m -${radius} 0 a ${radius} ${radius} 0 1 0 ${radius * 2} 0 a ${radius} ${radius} 0 1 0 -${radius * 2} 0`);
+            } else {
+                const startAngle = -90;
+                const endAngle = startAngle + angle;
+                
+                const startRadians = (startAngle * Math.PI) / 180;
+                const endRadians = (endAngle * Math.PI) / 180;
+                
+                const startX = centerX + radius * Math.cos(startRadians);
+                const startY = centerY + radius * Math.sin(startRadians);
+                const endX = centerX + radius * Math.cos(endRadians);
+                const endY = centerY + radius * Math.sin(endRadians);
+                
+                const largeArcFlag = angle > 180 ? 1 : 0;
+                
+                const pathData = `M ${centerX} ${centerY} L ${startX} ${startY} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${endX} ${endY} Z`;
+                progressPath.setAttribute('d', pathData);
+            }
+            
+            progressText.textContent = `${Math.round(percentage)}%`;
+            progressTextElement.textContent = `Resolved: ${resolved}/${total} cycles`;
+        }
+
+        function findDeadlockCycles() {
+            let cycles = [];
+            let graph = Array(processes.length).fill(0).map(() => Array(processes.length).fill(0));
+            dependencies.forEach(([from, to]) => graph[from][to] = 1);
+            
+            function dfs(node, visited, stack, path) {
+                visited[node] = true;
+                stack[node] = true;
+                path.push(node);
+                
+                for (let i = 0; i < processes.length; i++) {
+                    if (graph[node][i]) {
+                        if (!visited[i]) {
+                            if (dfs(i, visited, stack, path)) {
+                                return true;
+                            }
+                        } else if (stack[i]) {
+                            // Found a cycle
+                            const cycleStart = path.indexOf(i);
+                            const cycle = path.slice(cycleStart);
+                            cycles.push([...cycle]);
+                        }
+                    }
+                }
+                
+                stack[node] = false;
+                path.pop();
+                return false;
+            }
+            
+            let visited = Array(processes.length).fill(false);
+            let stack = Array(processes.length).fill(false);
+            
+            for (let i = 0; i < processes.length; i++) {
+                if (!visited[i]) {
+                    dfs(i, visited, stack, []);
+                }
+            }
+            
+            return cycles;
+        }
+
+        function resolveDeadlock() {
+            const deadlockPaths = findDeadlockCycles();
+            if (deadlockPaths.length === 0) {
+                alert("No deadlock to resolve!");
+                return;
+            }
+            
+            // Find the process with lowest priority in the first deadlock cycle
+            const lowestPriorityProcess = deadlockPaths[0].reduce((lowest, current) => {
+                return processes[current].priority < processes[lowest].priority ? current : lowest;
+            }, deadlockPaths[0][0]);
+            
+            // Find the specific dependency to remove (only one)
+            // First, find all dependencies where the lowest priority process is the source
+            const outgoingDependencies = dependencies.filter(([from, to]) => 
+                from === lowestPriorityProcess && deadlockPaths[0].includes(to)
+            );
+            
+            let dependencyRemoved = false;
+            
+            // If there are outgoing dependencies, remove the first one
+            if (outgoingDependencies.length > 0) {
+                const [from, to] = outgoingDependencies[0];
+                const index = dependencies.findIndex(([f, t]) => f === from && t === to);
+                if (index !== -1) {
+                    dependencies.splice(index, 1);
+                    dependencyRemoved = true;
+                }
+            } else {
+                // If no outgoing dependencies, find and remove one incoming dependency
+                const incomingDependencies = dependencies.filter(([from, to]) => 
+                    to === lowestPriorityProcess && deadlockPaths[0].includes(from)
+                );
+                
+                if (incomingDependencies.length > 0) {
+                    const [from, to] = incomingDependencies[0];
+                    const index = dependencies.findIndex(([f, t]) => f === from && t === to);
+                    if (index !== -1) {
+                        dependencies.splice(index, 1);
+                        dependencyRemoved = true;
+                    }
+                }
+            }
+            
+            if (dependencyRemoved) {
+                // Update the visualization
+                drawDependencies();
+                
+                // Check if deadlock is resolved
+                const remainingDeadlocks = findDeadlockCycles().length;
+                const resolved = deadlockPaths.length - remainingDeadlocks;
+                
+                // If deadlock is resolved, remove red highlights
+                if (remainingDeadlocks === 0) {
+                    // Reset all circles to normal state
+                    Object.values(processElements).forEach(el => {
+                        el.circle.setAttribute("class", "");
+                        el.circle.setAttribute("fill", "lightblue");
+                        el.circle.setAttribute("stroke", "black");
+                    });
+                    
+                    // Reset all dependencies to normal state
+                    const pathElements = document.querySelectorAll(".dependency");
+                    pathElements.forEach(path => {
+                        path.setAttribute("class", "dependency");
+                        path.setAttribute("stroke", "black");
+                    });
+                    
+                    document.getElementById("deadlockStatus").textContent = "No deadlock";
+                    document.getElementById("deadlockInfo").innerHTML = "<p>No deadlock detected.</p>";
+                } else {
+                    // If deadlock still exists, update visualization
+                    visualizeDeadlock();
+                    document.getElementById("deadlockStatus").textContent = "Deadlock detected!";
+                    updateDeadlockInfo();
+                }
+                
+                // Update the pie chart
+                updatePieChart(resolved, deadlockPaths.length);
+                
+                // Update the info panel
+                updateInfoPanel();
+            }
+        }
+    </script>
+</body>
+</html>
