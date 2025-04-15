@@ -11,6 +11,7 @@
     --shadow-color: rgba(0, 0, 0, 0.3);
 }
 
+
 :root[data-theme="light"] {
     --primary-color: #0072ff;
     --secondary-color: #00c6ff;
